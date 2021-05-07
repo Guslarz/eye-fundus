@@ -1,8 +1,10 @@
 import os
 import numpy as np
+import cv2
 from sys import stdout
 from urllib.request import urlretrieve
 from zipfile import ZipFile
+from skimage.io import imread
 
 
 class Dataset:
@@ -28,6 +30,8 @@ class Dataset:
 class HRFDataset(Dataset):
     DATASET_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'hrfdataset')
     DATASET_URL = "https://www5.cs.fau.de/fileadmin/research/datasets/fundus-images/all.zip"
+    IMAGES_DIR = os.path.join(DATASET_DIR, 'images')
+    MASKS_DIR = os.path.join(DATASET_DIR, 'manual1')
 
     def __init__(self, force_download=False):
         if not HRFDataset.__dir_exists() or force_download:
@@ -35,8 +39,8 @@ class HRFDataset(Dataset):
 
     @property
     def filenames(self):
-        image_paths = Dataset.list_directory(os.path.join(HRFDataset.DATASET_DIR, 'images'))
-        mask_paths = Dataset.list_directory(os.path.join(HRFDataset.DATASET_DIR, 'masks'))
+        image_paths = Dataset.list_directory(HRFDataset.IMAGES_DIR)
+        mask_paths = Dataset.list_directory(HRFDataset.MASKS_DIR)
         for image_path, mask_path in zip(image_paths, mask_paths):
             name = Dataset.extract_name(image_path)
             yield name, image_path, mask_path
@@ -65,7 +69,45 @@ class DataLoader:
         raise NotImplementedError()
 
 
-class DataGenerator:
+class ImageLoader(DataLoader):
+    def __init__(self, as_gray):
+        self.__as_gray = as_gray
+
+    def load(self, path):
+        img = imread(path, as_gray=self.__as_gray)
+        return img
+
+
+class DataTransformation(DataLoader):
+    def __init__(self, parent):
+        self.__parent = parent
+
+    def load(self, path):
+        return self.transform(self.__parent.load(path))
+
+    def transform(self, img):
+        raise NotImplementedError()
+
+
+class Resize(DataTransformation):
+    def __init__(self, parent, size):
+        super().__init__(parent)
+        self.__size = size
+
+    def transform(self, img):
+        return cv2.resize(img, self.__size)
+
+
+class DataLoaderFactory:
+    @staticmethod
+    def create_data_loader(as_gray=False, size=None):
+        loader = ImageLoader(as_gray=as_gray)
+        if size is not None:
+            loader = Resize(loader, size=size)
+        return loader
+
+
+class TrainingDataGenerator:
     def __init__(self, paths, image_loader, mask_loader):
         self.__paths = paths
         self.__image_loader = image_loader
@@ -77,17 +119,18 @@ class DataGenerator:
 
 
 class DatasetLoader:
-    VALIDATION_SIZE = 5
-    MAX_SIZE = None
-
-    def __init__(self, dataset, seed=None):
+    def __init__(self, dataset, seed=None, max_size=None, validation_size=5):
         random_state = np.random.RandomState(seed=seed)
-        paths = random_state.permutation(dataset.filenames)
-        if DatasetLoader.MAX_SIZE is not None:
-            paths = paths[:DatasetLoader.MAX_SIZE]
-        self.__train_paths = paths[:DatasetLoader.VALIDATION_SIZE]
-        self.__validation_paths = paths[DatasetLoader.VALIDATION_SIZE:]
+        paths = random_state.permutation([*dataset.filenames])
+        if max_size is not None:
+            paths = paths[:max_size]
+        self.__validation_paths = paths[:validation_size]
+        self.__train_paths = paths[validation_size:]
 
     def load_training(self, image_loader, mask_loader):
-        return DataGenerator(self.__train_paths, image_loader, mask_loader), \
-               DataGenerator(self.__validation_paths, image_loader, mask_loader)
+        return TrainingDataGenerator(self.__train_paths, image_loader, mask_loader), \
+               TrainingDataGenerator(self.__validation_paths, image_loader, mask_loader)
+
+    def load_validation(self, initial_image_loader, image_loader, mask_loader):
+        for name, image_path, mask_path in self.__validation_paths:
+            yield name, initial_image_loader.load(image_path), image_loader.load(image_path), mask_loader.load(mask_path)
