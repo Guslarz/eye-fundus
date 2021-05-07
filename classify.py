@@ -1,5 +1,11 @@
 import time
+import os
+import joblib
+from sys import stdout
+from sklearn.neighbors import KNeighborsClassifier
+
 from image_processing import *
+from features import FeatureExtractorAll, FeatureExtractorRandom, PixelExtractorRandom
 
 
 class ClassificationResult:
@@ -103,31 +109,39 @@ class ClassificationResult:
 
 
 class Classifier:
+    MODEL_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'model')
+
     def train(self, train_generator, validation_generator):
         raise NotImplementedError()
 
     def classify(self, name, raw_image, input_image, expected_result):
+        stdout.write("Classify...")
         start_time = time.time()
-        actual_result = self.inner_classify(input_image, expected_result)
+        actual_result = self._inner_classify(input_image)
         duration = time.time() - start_time
+        stdout.write("\rClassified \n")
         return ClassificationResult(name, raw_image, expected_result, actual_result, duration)
 
-    def inner_classify(self, input_image, expected_result):
+    def _inner_classify(self, input_image):
         raise NotImplementedError()
 
     def save(self):
         raise NotImplementedError()
 
-    @staticmethod
-    def load():
+    def load(self):
         raise NotImplementedError()
+
+    @staticmethod
+    def create_model_directory():
+        if not os.path.exists(Classifier.MODEL_DIR):
+            os.mkdir(Classifier.MODEL_DIR)
 
 
 class ImageProcessingClassifier(Classifier):
     def train(self, train_generator, validation_generator):
         pass
 
-    def inner_classify(self, input_image, expected_result):
+    def _inner_classify(self, input_image):
         image = input_image.copy()
         channels = rgb_split(image)
 
@@ -145,13 +159,12 @@ class ImageProcessingClassifier(Classifier):
     def save(self):
         pass
 
-    @staticmethod
-    def load():
-        return ImageProcessingClassifier()
+    def load(self):
+        pass
 
 
 class ImageProcessingClassifierTurboExtra(ImageProcessingClassifier):
-    def inner_classify(self, input_image, expected_result):
+    def _inner_classify(self, input_image):
         image = input_image.copy()
         channels = rgb_split(image)
 
@@ -168,18 +181,53 @@ class ImageProcessingClassifierTurboExtra(ImageProcessingClassifier):
         veils_fan = contrast(veils_fan, 0.25)
         return veils_fan
 
-    @staticmethod
-    def load():
-        return ImageProcessingClassifierTurboExtra()
+
+class KnnClassifier(Classifier):
+    MODEL_FILE = os.path.join(Classifier.MODEL_DIR, 'knn')
+    PATCH_SIZE = 5
+    PATCH_COUNT = 10000
+
+    def __init__(self, patch_size=PATCH_SIZE, patch_count=PATCH_COUNT):
+        self.__model = KNeighborsClassifier()
+        self.__patch_size = patch_size
+        self.__patch_count = patch_count
+
+    def train(self, train_generator, validation_generator):
+        x, y = [], []
+        seed = int(time.time())
+        feature_extractor = FeatureExtractorRandom(
+            patch_size=self.__patch_size, patch_count=self.__patch_count, seed=seed)
+        pixel_extractor = PixelExtractorRandom(count=self.__patch_count, seed=seed)
+        for i, (image, mask) in enumerate(train_generator):
+            stdout.write("\rTraining features: %.1f%%" % (100.0 * (i + 1) / train_generator.size))
+            stdout.flush()
+            x.extend(feature_extractor.extract(image))
+            y.extend(pixel_extractor.extract(mask))
+        stdout.write("\nTrain...")
+        stdout.flush()
+        self.__model.fit(x, y)
+        stdout.write("\rTrained\n")
+
+    def _inner_classify(self, input_image):
+        feature_extractor = FeatureExtractorAll(patch_size=self.__patch_size)
+        return self.__model.predict([*feature_extractor.extract(input_image)])\
+            .reshape(input_image.shape)
+
+    def save(self):
+        Classifier.create_model_directory()
+        joblib.dump(self.__model, KnnClassifier.MODEL_FILE)
+
+    def load(self):
+        self.__model = joblib.load(KnnClassifier.MODEL_FILE)
 
 
 class ClassifierFactory:
     @staticmethod
-    def create_classifier(cls, load=False, train_generator=None, validation_generator=None):
+    def create_classifier(cls, load=False, train_generator=None, validation_generator=None, **kwargs):
+        classifier = cls(**kwargs)
         if load:
-            classifier = cls.load()
+            classifier.load()
         else:
-            classifier = cls()
             classifier.train(train_generator, validation_generator)
             classifier.save()
         return classifier

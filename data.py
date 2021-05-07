@@ -5,6 +5,7 @@ from sys import stdout
 from urllib.request import urlretrieve
 from zipfile import ZipFile
 from skimage.io import imread
+from scipy.stats import moment
 
 
 class Dataset:
@@ -115,7 +116,7 @@ class DataLoaderFactory:
         return loader
 
 
-class TrainingDataGenerator:
+class ImageDataGenerator:
     def __init__(self, paths, image_loader, mask_loader):
         self.__paths = paths
         self.__image_loader = image_loader
@@ -124,6 +125,10 @@ class TrainingDataGenerator:
     def __iter__(self):
         for name, image_path, mask_path in self.__paths:
             yield self.__image_loader.load(image_path), self.__mask_loader.load(mask_path)
+
+    @property
+    def size(self):
+        return len(self.__paths)
 
 
 class DatasetLoader:
@@ -135,10 +140,16 @@ class DatasetLoader:
         self.__validation_paths = paths[:validation_size]
         self.__train_paths = paths[validation_size:]
 
-    def load_training(self, image_loader, mask_loader):
-        return TrainingDataGenerator(self.__train_paths, image_loader, mask_loader), \
-               TrainingDataGenerator(self.__validation_paths, image_loader, mask_loader)
+    def load_training(self, *args, **kwargs):
+        return DatasetLoader.__create_generator(self.__train_paths, *args, **kwargs), \
+               DatasetLoader.__create_generator(self.__validation_paths, *args, **kwargs)
 
-    def load_validation(self, raw_image_loader, image_loader, mask_loader):
-        for name, image_path, mask_path in self.__validation_paths:
-            yield name, raw_image_loader.load(image_path), image_loader.load(image_path), mask_loader.load(mask_path)
+    def load_validation(self, raw_image_loader, *args, **kwargs):
+        generator = DatasetLoader.__create_generator(self.__validation_paths, *args, **kwargs)
+        for (name, image_path, _), (image, mask) in zip(self.__validation_paths, generator):
+            yield name, raw_image_loader.load(image_path), image, mask
+
+    @staticmethod
+    def __create_generator(paths, image_loader, mask_loader):
+        generator = ImageDataGenerator(paths, image_loader, mask_loader)
+        return generator
