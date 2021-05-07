@@ -1,4 +1,3 @@
-import numpy as np
 import time
 from image_processing import *
 
@@ -151,14 +150,32 @@ class ImageProcessingClassifier(Classifier):
         return ImageProcessingClassifier()
 
 
-class ClassifierFactory:
-    CLASSIFIERS = {
-        'image-processing': ImageProcessingClassifier
-    }
+class ImageProcessingClassifierTurboExtra(ImageProcessingClassifier):
+    def inner_classify(self, input_image, expected_result):
+        image = input_image.copy()
+        channels = rgb_split(image)
+
+        mask = create_mask(channels[0])
+
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        img_green = cv2.cvtColor(put_mask(channels[1], mask), cv2.COLOR_BGR2GRAY)
+        img_clahe = clahe.apply(img_green)
+
+        veils = find_veils(img_clahe)
+        veils = put_mask(veils, mask)
+
+        veils_fan = normalize(veils.copy(), 0.28, 98)
+        veils_fan = contrast(veils_fan, 0.25)
+        return veils_fan
 
     @staticmethod
-    def create_classifier(name, load=False, train_generator=None, validation_generator=None):
-        cls = ClassifierFactory.CLASSIFIERS[name]
+    def load():
+        return ImageProcessingClassifierTurboExtra()
+
+
+class ClassifierFactory:
+    @staticmethod
+    def create_classifier(cls, load=False, train_generator=None, validation_generator=None):
         if load:
             classifier = cls.load()
         else:
