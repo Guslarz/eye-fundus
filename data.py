@@ -89,6 +89,12 @@ class DataTransformation(DataLoader):
         raise NotImplementedError()
 
 
+class Binarize(DataTransformation):
+    def transform(self, img):
+        img[img > 0] = 1
+        return img
+
+
 class Resize(DataTransformation):
     def __init__(self, parent, size):
         super().__init__(parent)
@@ -100,8 +106,10 @@ class Resize(DataTransformation):
 
 class DataLoaderFactory:
     @staticmethod
-    def create_data_loader(as_gray=False, size=None):
-        loader = ImageLoader(as_gray=as_gray)
+    def create_data_loader(as_gray=False, binarize=False, size=None):
+        loader = ImageLoader(as_gray=as_gray or binarize)
+        if binarize:
+            loader = Binarize(loader)
         if size is not None:
             loader = Resize(loader, size=size)
         return loader
@@ -131,6 +139,6 @@ class DatasetLoader:
         return TrainingDataGenerator(self.__train_paths, image_loader, mask_loader), \
                TrainingDataGenerator(self.__validation_paths, image_loader, mask_loader)
 
-    def load_validation(self, initial_image_loader, image_loader, mask_loader):
+    def load_validation(self, raw_image_loader, image_loader, mask_loader):
         for name, image_path, mask_path in self.__validation_paths:
-            yield name, initial_image_loader.load(image_path), image_loader.load(image_path), mask_loader.load(mask_path)
+            yield name, raw_image_loader.load(image_path), image_loader.load(image_path), mask_loader.load(mask_path)
