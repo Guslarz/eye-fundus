@@ -5,7 +5,7 @@ from sys import stdout
 from urllib.request import urlretrieve
 from zipfile import ZipFile
 from skimage.io import imread
-from scipy.stats import moment
+from skimage.exposure import equalize_adapthist
 
 
 class Dataset:
@@ -105,14 +105,43 @@ class Resize(DataTransformation):
         return cv2.resize(img, self.__size)
 
 
+class AddDimension(DataTransformation):
+    def transform(self, img):
+        return img.reshape((*img.shape, 1))
+
+
+class Standarize(DataTransformation):
+    def transform(self, img):
+        min_value = np.amin(img)
+        max_value = np.amax(img)
+        if min_value == max_value:
+            return img
+        return (img - min_value) / (max_value - min_value)
+
+
+class Clahe(DataTransformation):
+    def transform(self, img):
+        return equalize_adapthist(img)
+
+
 class DataLoaderFactory:
     @staticmethod
-    def create_data_loader(as_gray=False, binarize=False, size=None):
+    def create_data_loader(as_gray=False, binarize=False, size=None, standarize=False,
+                           clahe=False, add_dimension=False):
+
         loader = ImageLoader(as_gray=as_gray or binarize)
-        if binarize:
-            loader = Binarize(loader)
         if size is not None:
             loader = Resize(loader, size=size)
+
+        if clahe:
+            loader = Clahe(loader)
+        if binarize:
+            loader = Binarize(loader)
+        if standarize:
+            loader = Standarize(loader)
+
+        if add_dimension:
+            loader = AddDimension(loader)
         return loader
 
 
@@ -121,6 +150,9 @@ class ImageDataGenerator:
         self.__paths = paths
         self.__image_loader = image_loader
         self.__mask_loader = mask_loader
+
+    def shuffle(self):
+        np.random.shuffle(self.__paths)
 
     def __iter__(self):
         for name, image_path, mask_path in self.__paths:
@@ -141,8 +173,7 @@ class DatasetLoader:
         self.__train_paths = paths[validation_size:]
 
     def load_training(self, *args, **kwargs):
-        return DatasetLoader.__create_generator(self.__train_paths, *args, **kwargs), \
-               DatasetLoader.__create_generator(self.__validation_paths, *args, **kwargs)
+        return DatasetLoader.__create_generator(self.__train_paths, *args, **kwargs)
 
     def load_validation(self, raw_image_loader, *args, **kwargs):
         generator = DatasetLoader.__create_generator(self.__validation_paths, *args, **kwargs)
